@@ -29,7 +29,8 @@ To see available configuration options, run `phpipam-hosts -h`
 #### Requirements
 
 - Python
-- `python-mysqldb`
+- `python-mysqldb` 
+   (for debian-based system: apt-get install python-mysqldb)
 - installed and configured [phpIPAM](http://phpipam.net/) (can be installed on
   a different host than `phpipam-hosts`)
 
