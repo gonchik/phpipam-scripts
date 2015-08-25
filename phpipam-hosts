@@ -1,44 +1,15 @@
 #!/usr/bin/env python
-# vim: set fileencoding=utf-8
-
-# phpipam-hosts: generate host lists from phpIPAM database
-# Copyright 2014 Maciej Delmanowski <drybjed@gmail.com>
-# Homepage: https://github.com/debops/phpipam-scripts/
-# phpIPAM homepage: http://phpipam.net/
-
-
-# This program is free software; you can redistribute
-# it and/or modify it under the terms of the
-# GNU General Public License as published by the Free
-# Software Foundation; either version 2 of the License,
-# or (at your option) any later version.
-#
-# This program is distributed in the hope that it will
-# be useful, but WITHOUT ANY WARRANTY; without even the
-# implied warranty of MERCHANTABILITY or FITNESS FOR A
-# PARTICULAR PURPOSE. See the GNU General Public
-# License for more details.
-#
-# You should have received a copy of the GNU General
-# Public License along with this program; if not,
-# write to the Free Software Foundation, Inc., 59
-# Temple Place, Suite 330, Boston, MA  02111-1307  USA
-#
-# An on-line copy of the GNU General Public License can
-# be downloaded from the FSF web page at:
-# http://www.gnu.org/copyleft/gpl.html
-
 
 import os, sys, re, argparse, MySQLdb, string, socket, struct, ConfigParser, filecmp
 
 # Define script version
-script_version = 'v0.1'
+script_version = 'v0.1.1'
 
 # Parse command line arguments and define defaults
 arg_parser = argparse.ArgumentParser(
     prog='phpipam-hosts',
     description='Generate host lists from phpIPAM database',
-    epilog='%(prog)s Copyright (C) 2014 Maciej Delmanowski <drybjed@gmail.com>\nLicense: GPLv3. Homepage: https://github.com/ginas/phpipam-scripts/')
+    epilog='%(prog)s Copyright (C) 2014 Maciej Delmanowski <drybjed@gmail.com>\nLicense: GPLv3.')
 
 # Default confguration file
 arg_parser.add_argument('-c','--config', type=file, default='/etc/dhcp/phpipam.conf', metavar='CONFIG', help='use alternative configuration file')
@@ -93,7 +64,7 @@ arg_parser.add_argument('-y','--ddns', default=False, action='store_true', help=
 arg_parser.add_argument('-z','--errors', default=False, action='store_true', help='include only hosts with errors')
 
 # Display version
-arg_parser.add_argument('--version', action='version', version='%(prog)s ' + script_version)
+arg_parser.add_argument('-v','--version', action='version', version='%(prog)s ' + script_version)
 
 # Define scope - sections or subnets to use to generate host lists. Without
 # specified section or subnet, script will list sections or subnets available
@@ -103,11 +74,10 @@ scope.add_argument('-u','--subnets', type=int, nargs='*', metavar='SUBNET')
 
 # Define host state to include in create host lists (active, reserved, offline or dhcp)
 state = arg_parser.add_argument_group('State','what host state to include in output')
-state.add_argument('-A','--active', dest='states', action='append_const', const=1, help='active hosts (default)')
-state.add_argument('-R','--reserved', dest='states', action='append_const', const=2, help='reserved hosts')
-state.add_argument('-O','--offline', dest='states', action='append_const', const=0, help='offline hosts')
-state.add_argument('-D','--dhcp', dest='states', action='append_const', const=3, help='dhcp ranges and dynamic hosts')
-
+state.add_argument('-R','--reserved', dest='states', action='append_const', const=4, help='reserved hosts')
+state.add_argument('-O','--offline', dest='states', action='append_const', const=3, help='offline hosts')
+state.add_argument('-D','--dhcp', dest='states', action='append_const', const=2, help='dhcp ranges and dynamic hosts')
+state.add_argument('-U','--used', dest='states', action='append_const', const=1, help='active hosts (default)')
 # Parse arguments
 args = arg_parser.parse_args()
 if args.states is None:
@@ -149,30 +119,31 @@ if config.has_section(args.group):
 
   if args.subnets is None and config.has_option(args.group,'subnets'):
     args.subnets = config.get(args.group,'subnets').split(' ')
-
-  if config.has_option(args.group,'active'):
-    if config.getboolean(args.group,'active'):
+  
+  if config.has_option(args.group,'used'):
+    if config.getboolean(args.group,'used'):
       args.states.append(1)
     else:
       args.states = [x for x in args.states if x != 1]
 
-  if config.has_option(args.group,'reserved'):
-    if config.getboolean(args.group,'reserved'):
+  if config.has_option(args.group,'dhcp'):
+    if config.getboolean(args.group,'dhcp'):
       args.states.append(2)
     else:
       args.states = [x for x in args.states if x != 2]
 
   if config.has_option(args.group,'offline'):
     if config.getboolean(args.group,'offline'):
-      args.states.append(0)
-    else:
-      args.states = [x for x in args.states if x != 0]
-
-  if config.has_option(args.group,'dhcp'):
-    if config.getboolean(args.group,'dhcp'):
       args.states.append(3)
     else:
-      args.states = [x for x in args.states if x != 3]
+      args.states = [x for x in args.states if x != 3]  
+
+  if config.has_option(args.group,'reserved'):
+    if config.getboolean(args.group,'reserved'):
+      args.states.append(4)
+    else:
+      args.states = [x for x in args.states if x != 4]
+
 
 # If no host state was specified on the command line or in the configuration
 # file, default to active hosts only.
@@ -199,10 +170,11 @@ def ipAddr(s):
 
 # If no section has been specified, list all sections available.
 def listSections():
-  query = 'SELECT id,name,description FROM sections ORDER BY id ASC'
+  query = 'SELECT id, name, description FROM sections ORDER BY id ASC'
 
   try:
     db = MySQLdb.connect(read_default_file = args.config.name, read_default_group = 'mysql')
+
     cursor = db.cursor()
     cursor.execute(query)
 
@@ -289,7 +261,7 @@ if args.subnets is not None and not args.subnets:
 
 # ---- Host list / host file generation ----
 
-query = "SELECT dns_name,mac,ip_addr,state FROM ipaddresses WHERE "
+query = "SELECT dns_name, mac, ip_addr, state FROM ipaddresses WHERE "
 
 # Don't include hosts without specified MAC addresses by default.
 if args.no_mac is False:
@@ -307,11 +279,18 @@ if args.subnets is not None and args.subnets:
 query = query + "state IN (" + ','.join(map(str, args.states)) + ") ORDER BY ip_addr ASC"
 
 try:
+
+  print 'Start to connect database!'
+  
+
   db = MySQLdb.connect(read_default_file = args.config.name, read_default_group = 'mysql')
+  
+  
   cursor = db.cursor()
   cursor.execute(query)
 
   rows = cursor.fetchall()
+
 
   # We have some hosts, yay!
   if rows:
@@ -323,25 +302,30 @@ try:
       output = output + '# List of hosts for DNSmasq generated by phpipam-hosts\n\n'
 
     for row in rows:
+      
       fqdn = row[0]
-      hostname = fqdn.split('.')[0]
+      #hostname = fqdn.split('.')[0]
+      hostname = fqdn
+
       ip = ipAddr(row[2])
       ip_real = ip
+      
       state = row[3]
-
+      
       #entry = ''
 
       # Check the hostname. If it's not specified, generate one.
       if hostname:
-        host = hostname
+        host = hostname.replace(" ","");
       else:
-        if state != '3':
+        if state != '2':
           host = args.prefix_dhcp + '-' + re.sub('\.', '-', ip)
-          fqdn = host
+          fqdn = host.replace(" ","");
         else:
           host = args.prefix_dynamic + '-' + re.sub('\.', '-', ip)
-          fqdn = host
+          fqdn = host.replace(" ","");
 
+      
       # If mac address is specified, check it's validity.
       if row[1]:
         mac = ethernetAddr(row[1])
@@ -381,19 +365,22 @@ try:
 
       # After all tests, if we have valid host data, generate a host entry and
       # add it to the output.
-      if args.errors == False or (args.errors == True and mac_error):
 
+
+      if args.errors == False or (args.errors == True and mac_error):
+        
         if args.format == 'dhcpd':
           entry = '{}host {} {{\n'.format(comment, host_identifier)
           if mac:
             entry = entry + '{}{};\n'.format(comment, '        hardware ethernet ' + mac)
           if ip:
-            entry = entry + '{}{};\n'.format(comment, '        fixed-address ' + ip)
+            entry = entry + '{}{};\n'.format(comment, '        fixed-address ' + ip_real)
           if args.ddns:
             entry = entry + '{}{};\n'.format(comment, '        ddns-hostname "' + host + '"')
           entry = entry + '{}{};\n'.format(comment, '        option host-name "' + host + '"')
           entry = entry + '{}}}\n\n'.format(comment)
           output = output + entry
+
 
         elif args.format == 'dnsmasq':
           if not mac:
@@ -509,4 +496,3 @@ finally:
       db.close()
   except NameError:
     sys.exit(0)
-
